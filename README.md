@@ -1,2 +1,2 @@
-# gemini-webrtc-relay
-webrtc relay for gemini multimodel live api 
+# gemini-live-webrtc
+webrtc gateway for gemini multimodel live api 
