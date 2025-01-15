@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/asticode/go-astiav"
 	"github.com/google/uuid"
 	"github.com/hraban/opus"
 	"github.com/pion/webrtc/v4"
+	"github.com/realtime-ai/gemini-live-webrt/pkg/audio"
 	"google.golang.org/genai"
 )
 
@@ -186,6 +188,23 @@ func (s *WebRTCServer) HandleSession(ctx context.Context, peer *PeerConnection) 
 
 		// todo 解析audio
 
+		if message.ServerContent != nil {
+			if message.ServerContent.ModelTurn.Parts != nil {
+				for _, part := range message.ServerContent.ModelTurn.Parts {
+					if part.Text != "" {
+						log.Printf("model turn: %+v", part.Text)
+					}
+
+					if part.InlineData != nil {
+
+						log.Printf("model turn: recieve audio data: %d", len(part.InlineData.Data))
+					}
+				}
+			}
+
+			continue
+		}
+
 		messageBytes, err := json.Marshal(message)
 		if err != nil {
 			log.Fatal("marhal model response error: ", message, err)
@@ -201,9 +220,16 @@ func (s *WebRTCServer) HandleSession(ctx context.Context, peer *PeerConnection) 
 
 func (s *WebRTCServer) HandleRemoteAudio(ctx context.Context, peer *PeerConnection) {
 
+	// todo smaple rate 48000, channel 1, read from rtpparamser
 	decoder, err := opus.NewDecoder(48000, 1)
 	if err != nil {
 		log.Printf("创建 Opus 解码器失败: %v\n", err)
+		return
+	}
+
+	resample, err := audio.NewResample(48000, 16000, astiav.ChannelLayoutMono, astiav.ChannelLayoutMono)
+	if err != nil {
+		log.Printf("创建 resample 失败: %v\n", err)
 		return
 	}
 
@@ -234,7 +260,25 @@ func (s *WebRTCServer) HandleRemoteAudio(ctx context.Context, peer *PeerConnecti
 			samples[i*2+1] = byte(buffer[i] >> 8)
 		}
 
-		// todo resample
+		resamplePcm, err := resample.Resample(samples)
+		if err != nil {
+			log.Printf("resample error: %v\n", err)
+			continue
+		}
+
+		err = peer.genaiSession.Send(&genai.LiveClientMessage{
+			RealtimeInput: &genai.LiveClientRealtimeInput{
+				MediaChunks: []*genai.Blob{
+					{Data: resamplePcm, MIMEType: "audio/pcm"},
+				},
+			},
+		})
+
+		if err != nil {
+			log.Printf("send message error: %v\n", err)
+			continue
+		}
+
 	}
 
 }
@@ -242,6 +286,7 @@ func (s *WebRTCServer) HandleRemoteAudio(ctx context.Context, peer *PeerConnecti
 func (s *WebRTCServer) HandleLocalAudio(ctx context.Context, peer *PeerConnection) {
 
 	// 发送音频
+
 }
 
 // function createContent(msg) {

@@ -5,6 +5,8 @@ go 1.23.4
 require (
 	cloud.google.com/go v0.116.0 // indirect
 	cloud.google.com/go/compute/metadata v0.5.0 // indirect
+	github.com/asticode/go-astiav v0.30.0 // indirect
+	github.com/asticode/go-astikit v0.42.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
