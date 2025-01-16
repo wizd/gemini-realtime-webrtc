@@ -7,11 +7,13 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/asticode/go-astiav"
 	"github.com/google/uuid"
 	"github.com/hraban/opus"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/realtime-ai/gemini-live-webrt/pkg/audio"
 	"google.golang.org/genai"
 )
@@ -37,9 +39,11 @@ type PeerConnection struct {
 	dataChannel    *webrtc.DataChannel
 	metadata       map[string]interface{}
 	remoteAudio    *webrtc.TrackRemote
-	localAudio     webrtc.TrackLocal
+	localAudio     *webrtc.TrackLocalStaticSample
 	// 初始化一个genai client
 	genaiSession *genai.Session
+	// 初始化一个audio buffer
+	audioBuffer *audio.PlayoutBuffer
 }
 
 // NewWebRTCServer creates a new WebRTC server instance
@@ -92,6 +96,14 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 		dataChannel:    nil,
 		metadata:       make(map[string]interface{}),
 	}
+
+	audioBuffer, err := audio.NewPlayoutBuffer()
+	if err != nil {
+		log.Fatal("create audio buffer error: ", err)
+		http.Error(w, "Failed to create audio buffer", http.StatusInternalServerError)
+		return
+	}
+	peer.audioBuffer = audioBuffer
 
 	// Set up data channel handler
 	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
@@ -186,8 +198,7 @@ func (s *WebRTCServer) HandleSession(ctx context.Context, peer *PeerConnection) 
 
 		log.Printf("Received message: %+v", message)
 
-		// todo 解析audio
-
+		// 解析audio
 		if message.ServerContent != nil {
 			if message.ServerContent.ModelTurn.Parts != nil {
 				for _, part := range message.ServerContent.ModelTurn.Parts {
@@ -196,13 +207,23 @@ func (s *WebRTCServer) HandleSession(ctx context.Context, peer *PeerConnection) 
 					}
 
 					if part.InlineData != nil {
-
 						log.Printf("model turn: recieve audio data: %d", len(part.InlineData.Data))
+						err := peer.audioBuffer.Write(part.InlineData.Data)
+						if err != nil {
+							log.Fatal("write audio data error: ", err)
+						}
 					}
 				}
 			}
 
-			continue
+			if message.ServerContent.TurnComplete {
+				log.Printf("model turn: turn complete")
+				// add some audio smoothing
+				peer.audioBuffer.Clear()
+			} else {
+				continue
+			}
+
 		}
 
 		messageBytes, err := json.Marshal(message)
@@ -284,26 +305,68 @@ func (s *WebRTCServer) HandleRemoteAudio(ctx context.Context, peer *PeerConnecti
 }
 
 func (s *WebRTCServer) HandleLocalAudio(ctx context.Context, peer *PeerConnection) {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
 
-	// 发送音频
+	// 创建 Opus 编码器 (48kHz, mono)
+	encoder, err := opus.NewEncoder(48000, 1, opus.AppVoIP)
+	if err != nil {
+		log.Printf("Failed to create Opus encoder: %v", err)
+		return
+	}
 
+	var lastSendTime time.Time
+	// 创建编码缓冲区
+	pcm := make([]int16, frameSize)
+	opusData := make([]byte, maxDataBytes)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			// 检查距离上次发送是否已经超过20ms
+			if time.Since(lastSendTime) >= 20*time.Millisecond {
+				// 从buffer中读取一帧音频数据
+				audioData := peer.audioBuffer.ReadFrame()
+
+				// 将字节数据转换为int16切片
+				for i := 0; i < len(audioData); i += 2 {
+					pcm[i/2] = int16(audioData[i]) | int16(audioData[i+1])<<8
+				}
+
+				// Opus编码
+				n, err := encoder.Encode(pcm[:frameSize], opusData)
+				if err != nil {
+					log.Printf("Failed to encode audio: %v", err)
+					continue
+				}
+
+				// 创建音频样本
+				sample := media.Sample{
+					Data:     opusData[:n],
+					Duration: 20 * time.Millisecond,
+				}
+
+				// 写入音频轨道
+				if err := peer.localAudio.WriteSample(sample); err != nil {
+					log.Printf("Failed to write audio sample: %v", err)
+					continue
+				}
+
+				// 更新发送时间
+				lastSendTime = time.Now()
+			}
+		}
+	}
 }
 
-// function createContent(msg) {
+// 	数据格式
 // 	data = { 'clientContent': { 'turnComplete': true, 'turns': [{ 'parts': [{ 'text': msg }] }] } };
-// 	return JSON.stringify(data);
-// }
-
-// function createImageContent(msg) {
 // 	data = { 'realtimeInput': { 'mediaChunks': [{ 'data': msg, 'mimeType': 'image/jpeg' }] } };
-// 	return JSON.stringify(data);
-// }
-
-// function createAudioContent(msg) {
 // 	data = { 'realtimeInput': { 'mediaChunks': [{ 'data': msg, 'mimeType': 'audio/pcm' }] } };
-// 	return JSON.stringify(data);
-// }
 
+// HandleDataChannel 处理数据通道
 func (s *WebRTCServer) HandleDataChannel(ctx context.Context, peer *PeerConnection) {
 
 	defer peer.dataChannel.Close()
