@@ -3,9 +3,11 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -14,16 +16,17 @@ import (
 	"github.com/hraban/opus"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
-	"github.com/realtime-ai/gemini-live-webrt/pkg/audio"
+	"github.com/realtime-ai/gemini-realtime-webrtc/pkg/audio"
+	"github.com/realtime-ai/gemini-realtime-webrtc/pkg/utils"
 	"google.golang.org/genai"
 )
 
 const (
 	sampleRate    = 48000
-	channels      = 1
-	frameSize     = 960
-	opusFrameSize = 960  // 20ms @ 48kHz
-	maxDataBytes  = 1000 // 足够大的缓冲区用于 Opus 编码数据
+	channels      = 2
+	frameSize     = 960      // 20ms @ 48kHz
+	opusFrameSize = 960      // 20ms @ 48kHz
+	maxDataBytes  = 1000 * 2 // Buffer for Opus encoded data
 )
 
 // WebRTCServer manages WebRTC connections
@@ -55,6 +58,19 @@ func NewWebRTCServer() *WebRTCServer {
 
 // HandleNegotiate handles the WebRTC negotiation endpoint
 func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
+	// 添加 CORS 头
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	fmt.Println("request: ", r.Method)
+
+	// 处理 OPTIONS 请求
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -150,14 +166,18 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := genai.NewClient(ctx, &genai.ClientConfig{Backend: genai.BackendGoogleAI})
+	apiKey := os.Getenv("GOOGLE_API_KEY")
+
+	client, err := genai.NewClient(ctx, &genai.ClientConfig{APIKey: apiKey, Backend: genai.BackendGoogleAI})
 	if err != nil {
 		log.Fatal("create client error: ", err)
 		http.Error(w, "Failed to create client", http.StatusInternalServerError)
 		return
 	}
 
-	session, err := client.Live.Connect("gemini-2.0-flash-exp", &genai.LiveConnectConfig{})
+	session, err := client.Live.Connect("gemini-2.0-flash-exp", &genai.LiveConnectConfig{
+		ResponseModalities: []string{"AUDIO"},
+	})
 	if err != nil {
 		log.Fatal("connect to model error: ", err)
 		http.Error(w, "Failed to connect to model", http.StatusInternalServerError)
@@ -165,6 +185,9 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	peer.genaiSession = session
+
+	go s.HandleSession(ctx, peer)
+
 	// Wait for ICE gathering to complete
 	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
 	<-gatherComplete
@@ -174,11 +197,12 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 	s.Unlock()
 
 	peerConnection.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
-		log.Printf("Received track: %+v", track)
+		log.Printf("Received track: %s\n", track.ID())
 
 		if track.Kind() == webrtc.RTPCodecTypeAudio {
 			log.Printf("Received audio track: %+v", track)
-
+			peer.remoteAudio = track
+			go s.HandleRemoteAudio(ctx, peer)
 		}
 	})
 
@@ -189,6 +213,16 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *WebRTCServer) HandleSession(ctx context.Context, peer *PeerConnection) {
+	var dumper *audio.Dumper
+	if os.Getenv("DUMP_SESSION_AUDIO") == "true" {
+		var err error
+		dumper, err = audio.NewDumper("session", 24000, 1)
+		if err != nil {
+			log.Printf("创建 session dumper 失败: %v\n", err)
+		} else {
+			defer dumper.Close()
+		}
+	}
 
 	for {
 		message, err := peer.genaiSession.Receive()
@@ -196,11 +230,11 @@ func (s *WebRTCServer) HandleSession(ctx context.Context, peer *PeerConnection) 
 			log.Fatal("receive model response error: ", err)
 		}
 
-		log.Printf("Received message: %+v", message)
+		log.Printf("Received message: %+v\n", message)
 
 		// 解析audio
 		if message.ServerContent != nil {
-			if message.ServerContent.ModelTurn.Parts != nil {
+			if message.ServerContent.ModelTurn != nil {
 				for _, part := range message.ServerContent.ModelTurn.Parts {
 					if part.Text != "" {
 						log.Printf("model turn: %+v", part.Text)
@@ -212,18 +246,19 @@ func (s *WebRTCServer) HandleSession(ctx context.Context, peer *PeerConnection) 
 						if err != nil {
 							log.Fatal("write audio data error: ", err)
 						}
+
+						if dumper != nil {
+							dumper.Write(part.InlineData.Data)
+						}
 					}
 				}
 			}
 
-			if message.ServerContent.TurnComplete {
-				log.Printf("model turn: turn complete")
-				// add some audio smoothing
+			message.ServerContent.ModelTurn = nil
+			if message.ServerContent.Interrupted {
+				log.Printf("model turn: interrupted")
 				peer.audioBuffer.Clear()
-			} else {
-				continue
 			}
-
 		}
 
 		messageBytes, err := json.Marshal(message)
@@ -236,12 +271,20 @@ func (s *WebRTCServer) HandleSession(ctx context.Context, peer *PeerConnection) 
 			break
 		}
 	}
-
 }
 
 func (s *WebRTCServer) HandleRemoteAudio(ctx context.Context, peer *PeerConnection) {
+	var dumper *audio.Dumper
+	if os.Getenv("DUMP_REMOTE_AUDIO") == "true" {
+		var err error
+		dumper, err = audio.NewDumper("remoteaudio", 48000, 1)
+		if err != nil {
+			log.Printf("创建 remote dumper 失败: %v\n", err)
+		} else {
+			defer dumper.Close()
+		}
+	}
 
-	// todo smaple rate 48000, channel 1, read from rtpparamser
 	decoder, err := opus.NewDecoder(48000, 1)
 	if err != nil {
 		log.Printf("创建 Opus 解码器失败: %v\n", err)
@@ -254,12 +297,9 @@ func (s *WebRTCServer) HandleRemoteAudio(ctx context.Context, peer *PeerConnecti
 		return
 	}
 
-	// todo need add jitter buffer
+	pcm := make([]int16, frameSize)
 
-	buffer := make([]int16, frameSize)
-	pcm := make([]int16, frameSize)      // 解码后的 PCM 数据
-	samples := make([]byte, frameSize*2) // 用于转换的临时缓冲区
-
+	var logSample int = 0
 	for {
 		rtp, _, err := peer.remoteAudio.ReadRTP()
 		if err != nil {
@@ -267,18 +307,23 @@ func (s *WebRTCServer) HandleRemoteAudio(ctx context.Context, peer *PeerConnecti
 			break
 		}
 
+		if logSample%1000 == 0 {
+			log.Printf("read rtp logSample: %d\n", logSample)
+			log.Printf("rtp payload len: %+v\n", len(rtp.Payload))
+		}
+
+		logSample++
+
 		n, err := decoder.Decode(rtp.Payload, pcm)
 		if err != nil {
 			log.Printf("解码音频失败: %v\n", err)
 			continue
 		}
 
-		copy(buffer, pcm[:n])
+		samples := utils.Int16SliceToByteSlice(pcm[:n])
 
-		// 将 int16 数据转换为字节序列
-		for i := 0; i < n; i++ {
-			samples[i*2] = byte(buffer[i])
-			samples[i*2+1] = byte(buffer[i] >> 8)
+		if dumper != nil {
+			dumper.Write(samples)
 		}
 
 		resamplePcm, err := resample.Resample(samples)
@@ -299,14 +344,23 @@ func (s *WebRTCServer) HandleRemoteAudio(ctx context.Context, peer *PeerConnecti
 			log.Printf("send message error: %v\n", err)
 			continue
 		}
-
 	}
-
 }
 
 func (s *WebRTCServer) HandleLocalAudio(ctx context.Context, peer *PeerConnection) {
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
+
+	var dumper *audio.Dumper
+	if os.Getenv("DUMP_LOCAL_AUDIO") == "true" {
+		var err error
+		dumper, err = audio.NewDumper("localaudio", 48000, 1)
+		if err != nil {
+			log.Printf("创建 local dumper 失败: %v\n", err)
+		} else {
+			defer dumper.Close()
+		}
+	}
 
 	// 创建 Opus 编码器 (48kHz, mono)
 	encoder, err := opus.NewEncoder(48000, 1, opus.AppVoIP)
@@ -329,6 +383,10 @@ func (s *WebRTCServer) HandleLocalAudio(ctx context.Context, peer *PeerConnectio
 			if time.Since(lastSendTime) >= 20*time.Millisecond {
 				// 从buffer中读取一帧音频数据
 				audioData := peer.audioBuffer.ReadFrame()
+
+				if dumper != nil {
+					dumper.Write(audioData)
+				}
 
 				// 将字节数据转换为int16切片
 				for i := 0; i < len(audioData); i += 2 {
@@ -381,8 +439,6 @@ func (s *WebRTCServer) HandleDataChannel(ctx context.Context, peer *PeerConnecti
 			log.Println("unmarshal message error ", string(message), err)
 			return
 		}
-
-		log.Printf("send message to model: %+v", sendMessage)
 		peer.genaiSession.Send(&sendMessage)
 	})
 

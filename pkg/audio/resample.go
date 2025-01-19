@@ -72,13 +72,31 @@ func (r *Resample) Resample(inputData []byte) ([]byte, error) {
 	r.inFrame.SetChannelLayout(r.inLayout)
 	r.inFrame.SetSampleFormat(astiav.SampleFormatS16)
 	r.inFrame.SetSampleRate(r.inRate)
-	r.inFrame.SetNbSamples(len(inputData) / 4) // 双声道16位，所以除以4
+
+	// 计算每个采样的字节数
+	bytesPerSample := 2 // S16 格式为 2 字节
+	var inChannels int
+	if r.inLayout == astiav.ChannelLayoutMono {
+		inChannels = 1
+	} else if r.inLayout == astiav.ChannelLayoutStereo {
+		inChannels = 2
+	} else {
+		return nil, fmt.Errorf("unsupported channel layout")
+	}
+	bytesPerFrame := bytesPerSample * inChannels
+
+	// 计算采样点数
+	numSamples := len(inputData) / bytesPerFrame
+	r.inFrame.SetNbSamples(numSamples)
 
 	// 设置输出帧参数
 	r.outFrame.SetChannelLayout(r.outLayout)
 	r.outFrame.SetSampleFormat(astiav.SampleFormatS16)
 	r.outFrame.SetSampleRate(r.outRate)
-	r.outFrame.SetNbSamples((len(inputData) / 4 * r.outRate) / r.inRate)
+
+	// 计算输出采样点数，考虑采样率转换
+	outNumSamples := (numSamples * r.outRate) / r.inRate
+	r.outFrame.SetNbSamples(outNumSamples)
 
 	// 分配帧缓冲区
 	if err := r.inFrame.AllocBuffer(align); err != nil {

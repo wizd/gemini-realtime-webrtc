@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"log"
 	"sync"
 
 	"github.com/asticode/go-astiav"
@@ -24,9 +25,10 @@ const (
 
 // PlayoutBuffer 实现固定长度的音频输出，支持24kHz输入重采样到48kHz输出
 type PlayoutBuffer struct {
-	buffer    []byte
-	mu        sync.Mutex
-	resampler *Resample
+	buffer       []byte
+	mu           sync.Mutex
+	resampler    *Resample
+	accumulating bool // 是否正在积累数据
 }
 
 // NewPlayoutBuffer 创建新的 PlayoutBuffer
@@ -37,8 +39,9 @@ func NewPlayoutBuffer() (*PlayoutBuffer, error) {
 	}
 
 	return &PlayoutBuffer{
-		buffer:    make([]byte, 0, BytesPerFrame48kHz*100), // 预分配2
-		resampler: resampler,
+		buffer:       make([]byte, 0, BytesPerFrame48kHz*100), // 预分配2秒的容量
+		resampler:    resampler,
+		accumulating: false,
 	}, nil
 }
 
@@ -69,6 +72,17 @@ func (pb *PlayoutBuffer) ReadFrame() []byte {
 	// 准备输出缓冲区
 	frame := make([]byte, BytesPerFrame48kHz)
 
+	// 如果正在积累数据且缓冲区小于100ms，返回静音
+	if pb.accumulating && len(pb.buffer) < BytesPerFrame48kHz*5 { // 5帧 = 100ms
+		return frame
+	}
+
+	// 如果有足够数据，关闭积累状态
+	if pb.accumulating && len(pb.buffer) >= BytesPerFrame48kHz*5 {
+		pb.accumulating = false
+		log.Printf("accumulated enough data (%d bytes), starting playback", len(pb.buffer))
+	}
+
 	if len(pb.buffer) >= BytesPerFrame48kHz {
 		// 有足够的数据，复制一帧
 		copy(frame, pb.buffer[:BytesPerFrame48kHz])
@@ -85,18 +99,20 @@ func (pb *PlayoutBuffer) ReadFrame() []byte {
 	return frame
 }
 
+// Clear 清空缓冲区并开始积累新数据
+func (pb *PlayoutBuffer) Clear() {
+	pb.mu.Lock()
+	defer pb.mu.Unlock()
+	log.Printf("clear buffer: %d, starting accumulation", len(pb.buffer))
+	pb.buffer = pb.buffer[:0]
+	pb.accumulating = true
+}
+
 // Available 返回当前可用的音频数据长度（字节）
 func (pb *PlayoutBuffer) Available() int {
 	pb.mu.Lock()
 	defer pb.mu.Unlock()
 	return len(pb.buffer)
-}
-
-// Clear 清空缓冲区
-func (pb *PlayoutBuffer) Clear() {
-	pb.mu.Lock()
-	defer pb.mu.Unlock()
-	pb.buffer = pb.buffer[:0]
 }
 
 // Close 释放资源

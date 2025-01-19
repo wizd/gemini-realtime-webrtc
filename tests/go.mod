@@ -1,4 +1,4 @@
-module github.com/realtime-ai/gemini-live-webrt/tests
+module github.com/realtime-ai/gemini-realtime-webrt/tests
 
 go 1.23.4
 

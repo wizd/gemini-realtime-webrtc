@@ -1,4 +1,4 @@
-module github.com/realtime-ai/gemini-live-webrt
+module github.com/realtime-ai/gemini-realtime-webrtc
 
 go 1.23.4
 
@@ -12,6 +12,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hraban/opus v0.0.0-20230925203106-0188a62cb302 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
 	github.com/pion/dtls/v2 v2.2.12 // indirect
 	github.com/pion/dtls/v3 v3.0.4 // indirect
