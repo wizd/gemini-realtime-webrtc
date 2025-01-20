@@ -1,7 +1,7 @@
 # Gemini Realtime WebRTC
 
 
-Gemini Realtime API with WebRTC， Like OpenAI Realtime API with WebRTC.
+Gemini Realtime API with WebRTC, Like OpenAI Realtime API with WebRTC.
 
 
 
