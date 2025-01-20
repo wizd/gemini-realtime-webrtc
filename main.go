@@ -9,7 +9,7 @@ import (
 
 func main() {
 	godotenv.Load()
-	if err := gateway.StartServer(":8080"); err != nil {
+	if err := gateway.StartServer(":8280"); err != nil {
 		log.Fatal(err)
 	}
 }
