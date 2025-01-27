@@ -201,6 +201,13 @@
                 document.getElementById('connect').disabled = true;
             };
 
+            const audioEl = document.createElement("audio");
+            audioEl.autoplay = true;
+            pc.ontrack = (e) => {
+                console.log("ontrack", e);
+                audioEl.srcObject = e.streams[0];
+            };
+
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             await pc.addTransceiver(stream.getAudioTracks()[0], { direction: 'sendrecv' });
 
@@ -208,11 +215,7 @@
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
-            const audioEl = document.createElement("audio");
-            audioEl.autoplay = true;
-            pc.ontrack = (e) => {
-                audioEl.srcObject = e.streams[0];
-            };
+       
 
             // Wait for ICE gathering to complete
             await new Promise(resolve => {

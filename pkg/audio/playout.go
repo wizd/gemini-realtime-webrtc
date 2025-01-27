@@ -73,7 +73,7 @@ func (pb *PlayoutBuffer) ReadFrame() []byte {
 	frame := make([]byte, BytesPerFrame48kHz)
 
 	// 如果正在积累数据且缓冲区小于100ms，返回静音
-	if pb.accumulating && len(pb.buffer) < BytesPerFrame48kHz*5 { // 5帧 = 100ms
+	if pb.accumulating && len(pb.buffer) < BytesPerFrame48kHz*10 { // 10帧 = 200ms
 		return frame
 	}
 
