@@ -93,9 +93,7 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 
 	// 创建 PeerConnection
 	pc, err := s.api.NewPeerConnection(webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{URLs: []string{"stun:stun.l.google.com:19302"}},
-		},
+		ICEServers: []webrtc.ICEServer{},
 	})
 	if err != nil {
 		http.Error(w, "Failed to create peer connection", http.StatusInternalServerError)
@@ -122,6 +120,7 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 
 	// 将远端 Offer 设置为本地 PeerConnection 的 RemoteDescription
 	if err := pc.SetRemoteDescription(offer); err != nil {
+		fmt.Printf("Failed to set remote description: %v\n", err)
 		http.Error(w, "Failed to set remote description", http.StatusInternalServerError)
 		return
 	}

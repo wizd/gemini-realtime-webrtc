@@ -214,7 +214,7 @@
                         // 移除 base64 头部
                         const base64Data = jpeg.split(';base64,')[1];
 
-                        console.log('base64Data', base64Data);
+                        //console.log('base64Data', base64Data);
                         // 构建消息
                         data = { 'realtimeInput': { 'mediaChunks': [{ 'data': base64Data, 'mimeType': 'image/jpeg' }] } };
                         

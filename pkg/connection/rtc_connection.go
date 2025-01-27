@@ -178,7 +178,6 @@ func (c *RTCConnectionWrapper) readDataChannel(ctx context.Context) {
 	defer c.dataChannel.Close()
 
 	c.dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
-		log.Printf("Received message: %s", string(msg.Data))
 
 		message := msg.Data
 
