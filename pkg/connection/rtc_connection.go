@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"os"
 	"time"
@@ -83,7 +84,10 @@ func (c *RTCConnectionWrapper) Start(ctx context.Context, pc *webrtc.PeerConnect
 
 	pc.OnDataChannel(func(d *webrtc.DataChannel) {
 		log.Printf("DataChannel created: %s", d.Label())
-		// todo: 注册 DataChannel 事件回调
+
+		c.dataChannel = d
+
+		go c.readDataChannel(ctx)
 	})
 
 	pc.OnTrack(func(track *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
@@ -167,4 +171,24 @@ func (c *RTCConnectionWrapper) readRemoteAudio(ctx context.Context) {
 			c.opusDecodeElement.In() <- msg
 		}
 	}
+}
+
+func (c *RTCConnectionWrapper) readDataChannel(ctx context.Context) {
+
+	defer c.dataChannel.Close()
+
+	c.dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
+		log.Printf("Received message: %s", string(msg.Data))
+
+		message := msg.Data
+
+		var sendMessage genai.LiveClientMessage
+		if err := json.Unmarshal(message, &sendMessage); err != nil {
+			log.Println("unmarshal message error ", string(message), err)
+			return
+		}
+		c.genaiSession.Send(&sendMessage)
+	})
+
+	<-ctx.Done()
 }
