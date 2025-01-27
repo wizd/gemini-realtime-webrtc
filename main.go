@@ -1,9 +1,23 @@
 package main
 
 import (
+	"log"
+	"net/http"
+
 	"github.com/joho/godotenv"
 	"github.com/realtime-ai/gemini-realtime-webrtc/pkg/server"
 )
+
+// StartServer 启动 WebRTC 服务器
+func StartServer(addr string) error {
+	rtcServer := server.NewWebRTCServer(9000)
+	rtcServer.Start()
+
+	http.HandleFunc("/session", rtcServer.HandleNegotiate)
+
+	log.Printf("WebRTC server starting on %s", addr)
+	return http.ListenAndServe(addr, nil)
+}
 
 func main() {
 	godotenv.Load()
@@ -11,5 +25,5 @@ func main() {
 	// 	log.Fatal(err)
 	// }
 
-	server.StartServer(":8080")
+	StartServer(":8080")
 }

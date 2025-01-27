@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 
@@ -15,13 +17,48 @@ import (
 
 type WebRTCServer struct {
 	sync.RWMutex
-	peers map[string]*connection.RTCConnectionWrapper
+	peers      map[string]*connection.RTCConnectionWrapper
+	rtcUDPPort int
+	api        *webrtc.API
 }
 
-func NewWebRTCServer() *WebRTCServer {
+func NewWebRTCServer(rtcUDPPort int) *WebRTCServer {
+
 	return &WebRTCServer{
-		peers: make(map[string]*connection.RTCConnectionWrapper),
+		rtcUDPPort: rtcUDPPort,
+		peers:      make(map[string]*connection.RTCConnectionWrapper),
 	}
+}
+
+func (s *WebRTCServer) Start() error {
+
+	settingEngine := webrtc.SettingEngine{}
+	settingEngine.SetLite(true)
+
+	settingEngine.SetNetworkTypes([]webrtc.NetworkType{
+		webrtc.NetworkTypeUDP4,
+		webrtc.NetworkTypeTCP4,
+	})
+
+	udpListener, err := net.ListenUDP("udp", &net.UDPAddr{
+		IP:   net.ParseIP("0.0.0.0"),
+		Port: s.rtcUDPPort,
+	})
+
+	if err != nil {
+		fmt.Printf("监听 UDP 端口失败: %v\n", err)
+		return err
+	}
+
+	udpMux := webrtc.NewICEUDPMux(nil, udpListener)
+	settingEngine.SetICEUDPMux(udpMux)
+
+	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
+
+	s.api = api
+
+	return nil
+
 }
 
 // HandleNegotiate 处理 /session 路由
@@ -55,7 +92,7 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 	ctx := context.Background()
 
 	// 创建 PeerConnection
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{
+	pc, err := s.api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{URLs: []string{"stun:stun.l.google.com:19302"}},
 		},
@@ -107,13 +144,4 @@ func (s *WebRTCServer) HandleNegotiate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/sdp")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(pc.LocalDescription())
-}
-
-// StartServer 启动 WebRTC 服务器
-func StartServer(addr string) error {
-	server := NewWebRTCServer()
-	http.HandleFunc("/session", server.HandleNegotiate)
-
-	log.Printf("WebRTC server starting on %s", addr)
-	return http.ListenAndServe(addr, nil)
 }
