@@ -127,6 +127,23 @@
             color: #2e7d32;
             margin-bottom: 10px;
         }
+
+        .video-container {
+            margin-top: 20px;
+            text-align: center;
+        }
+        #localVideo {
+            width: 320px;
+            height: 240px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        #capturedImage {
+            margin-top: 10px;
+            max-width: 320px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
     </style>
 </head>
 <body>
@@ -148,11 +165,66 @@
         <div class="audio-controls">
             <div class="audio-status">Audio Enabled</div>
         </div>
+
+        <div class="video-container">
+            <video id="localVideo" autoplay playsinline muted></video>
+            <canvas id="canvas" style="display:none;"></canvas>
+            <img id="capturedImage" />
+        </div>
     </div>
 
     <script>
         let pc;
         let dc;
+        let videoTrack;
+        let imageCapture;
+        let captureInterval;
+
+        async function setupVideoCapture(stream) {
+            videoTrack = stream.getVideoTracks()[0];
+            const video = document.getElementById('localVideo');
+            video.srcObject = new MediaStream([videoTrack]);
+
+            // 创建 ImageCapture
+            imageCapture = new ImageCapture(videoTrack);
+
+            // 设置定时捕获
+            captureInterval = setInterval(async () => {
+                try {
+                    // 捕获图像
+                    const bitmap = await imageCapture.grabFrame();
+                    
+                    // 使用 canvas 转换为 JPEG
+                    const canvas = document.getElementById('canvas');
+                    canvas.width = bitmap.width;
+                    canvas.height = bitmap.height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(bitmap, 0, 0);
+                    
+                    // 转换为 JPEG 并压缩
+                    const jpeg = canvas.toDataURL('image/jpeg', 0.5);
+                    
+                    // var encodedImage = videoCanvas.toDataURL('image/jpeg').split(';base64,')[1];
+
+                    // 显示预览
+                    document.getElementById('capturedImage').src = jpeg;
+
+                    // 通过 DataChannel 发送
+                    if (dc && dc.readyState === 'open') {
+                        // 移除 base64 头部
+                        const base64Data = jpeg.split(';base64,')[1];
+
+                        //console.log('base64Data', base64Data);
+                        // 构建消息
+                        data = { 'realtimeInput': { 'mediaChunks': [{ 'data': base64Data, 'mimeType': 'image/jpeg' }] } };
+                        
+                        dc.send(JSON.stringify(data));
+                    }
+                } catch (err) {
+                    console.error('Error capturing image:', err);
+                }
+            }, 1000); // 每秒捕获一次
+        }
 
         const connect = async () => {
             // Create RTCPeerConnection
@@ -165,9 +237,7 @@
                 const messageDiv = document.createElement('div');
                 messageDiv.className = 'message received';
 
-
-                // 1. 用 TextDecoder 把 ArrayBuffer 解码成字符串
-                const decoder = new TextDecoder('utf-8');  // 默认也是 'utf-8'
+                const decoder = new TextDecoder('utf-8');
                 const jsonString = decoder.decode(e.data);
                 let data;
 
@@ -201,18 +271,32 @@
                 document.getElementById('connect').disabled = true;
             };
 
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const audioEl = document.createElement("audio");
+            audioEl.autoplay = true;
+            pc.ontrack = (e) => {
+                console.log("ontrack", e);
+                audioEl.srcObject = e.streams[0];
+            };
+
+            // 获取音频和视频流
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: true,
+                video: {
+                    width: { ideal: 640 },
+                    height: { ideal: 480 },
+                    frameRate: { ideal: 30 }
+                }
+            });
+
+            // 设置音频轨道
             await pc.addTransceiver(stream.getAudioTracks()[0], { direction: 'sendrecv' });
+            
+            // 设置视频捕获
+            await setupVideoCapture(stream);
 
             // Create offer
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
-
-            const audioEl = document.createElement("audio");
-            audioEl.autoplay = true;
-            pc.ontrack = (e) => {
-                audioEl.srcObject = e.streams[0];
-            };
 
             // Wait for ICE gathering to complete
             await new Promise(resolve => {
@@ -285,6 +369,19 @@
         document.getElementById('message').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 document.getElementById('send').click();
+            }
+        });
+
+        // 清理函数
+        window.addEventListener('beforeunload', () => {
+            if (captureInterval) {
+                clearInterval(captureInterval);
+            }
+            if (videoTrack) {
+                videoTrack.stop();
+            }
+            if (pc) {
+                pc.close();
             }
         });
     </script>

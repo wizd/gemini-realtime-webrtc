@@ -17,6 +17,9 @@ require (
 	cloud.google.com/go/compute/metadata v0.5.0 // indirect
 	github.com/asticode/go-astikit v0.42.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/go-audio/audio v1.0.0 // indirect
+	github.com/go-audio/riff v1.0.0 // indirect
+	github.com/go-audio/wav v1.1.0 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/pion/datachannel v1.5.10 // indirect
@@ -36,6 +39,9 @@ require (
 	github.com/pion/turn/v4 v4.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
+	github.com/youpy/go-riff v0.1.0 // indirect
+	github.com/youpy/go-wav v0.3.2 // indirect
+	github.com/zaf/g711 v0.0.0-20190814101024-76a4a538f52b // indirect
 	golang.org/x/crypto v0.29.0 // indirect
 	golang.org/x/net v0.31.0 // indirect
 	golang.org/x/oauth2 v0.23.0 // indirect

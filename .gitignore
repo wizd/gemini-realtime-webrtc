@@ -26,4 +26,6 @@ go.work.sum
 
 # audio dumper
 *.pcm
+*.wav
+
 gemini-realtime-webrtc
